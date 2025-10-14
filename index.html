@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Die Simpsons — Checkliste & Player</title>
+
+<!-- Firebase (compat) -->
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-database-compat.js"></script>
+
+<!-- HLS.js (falls m3u8 später genutzt wird) -->
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+
+<style>
+  :root{--bg:#071126;--muted:#9aa4b2;--accent:#22c1c3}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#071126,#071b2a);color:#e6eef6;padding:20px}
+  .wrap{max-width:1100px;margin:0 auto}
+  header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  h1{margin:0;font-size:1.3rem}
+  .subtitle{color:var(--muted);font-size:0.95rem}
+  .panel{background:rgba(255,255,255,0.02);padding:12px;border-radius:10px;margin-bottom:12px;border:1px solid rgba(255,255,255,0.03)}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .search{flex:1;min-width:180px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+  .btn{background:linear-gradient(90deg,var(--accent),#6be2b9);border:none;color:#042027;padding:8px 12px;border-radius:8px;font-weight:600;cursor:pointer}
+  .btn.ghost{background:transparent;color:var(--accent);border:1px solid rgba(255,255,255,0.04)}
+  .seasons{display:grid;grid-template-columns:1fr;gap:10px;margin-top:12px}
+  @media(min-width:900px){.seasons{grid-template-columns:1fr 1fr}}
+  .season{background:rgba(255,255,255,0.015);padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.02)}
+  .season-head{display:flex;justify-content:space-between;align-items:center}
+  .episode-list{max-height:360px;overflow:auto;margin-top:8px;padding-right:6px}
+  .episode{display:flex;align-items:center;gap:10px;padding:6px;border-radius:8px}
+  .episode:hover{background:rgba(255,255,255,0.01);cursor:pointer}
+  .ep-left{width:46px;text-align:right;color:var(--muted);font-weight:700}
+  .ep-title{flex:1}
+  .small{font-size:0.85rem;color:var(--muted)}
+  .progress{height:10px;background:rgba(255,255,255,0.03);border-radius:999px;overflow:hidden;width:180px}
+  .progress > i{display:block;height:100%;background:linear-gradient(90deg,#22c1c3,#6be2b9);width:0%}
+  .badge{background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:999px}
+  .footer{color:var(--muted);margin-top:12px}
+  textarea{width:100%;min-height:100px;border-radius:8px;padding:8px;background:transparent;border:1px solid rgba(255,255,255,0.04);color:inherit}
+
+  /* modal */
+  .modal{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,0.6);z-index:1000;padding:20px}
+  .modal.open{display:flex}
+  .modal-content{background:#061123;border-radius:12px;padding:12px;max-width:960px;width:100%}
+  .modal-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+  .modal-close{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted);padding:6px 10px;border-radius:8px;cursor:pointer;margin-left:8px}
+  video{width:100%;height:480px;background:black;border-radius:8px;display:block}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Die Simpsons — Checkliste & Player</h1>
+      <div class="subtitle">Playlist automatisch geladen · global sync via Firebase · Popup-Player</div>
+    </div>
+    <div style="margin-left:auto" class="small">
+      <span class="badge" id="statusBadge">Lade…</span>
+    </div>
+  </header>
+
+  <div class="panel">
+    <div class="controls">
+      <input id="search" class="search" placeholder="Suche (z. B. 'Bart', 'S01E04')">
+      <button id="expandAll" class="btn ghost">Alle auf</button>
+      <button id="collapseAll" class="btn ghost">Alle zu</button>
+      <button id="markAllSeen" class="btn">Alles gesehen</button>
+      <button id="markAllUnseen" class="btn ghost">Alles ungesehen</button>
+      <button id="exportBtn" class="btn ghost">Export JSON</button>
+      <button id="importBtn" class="btn ghost">Import JSON</button>
+    </div>
+
+    <div style="display:flex;gap:12px;align-items:center;margin-top:12px;">
+      <div class="small">Gesehen: <strong id="seenCount">0</strong> / <strong id="allCount">0</strong></div>
+      <div style="margin-left:auto; display:flex;align-items:center;gap:8px;">
+        <div class="progress" title="Fortschritt"><i id="progressFill"></i></div>
+        <div class="small" id="progressPct">0%</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="seasonsContainer" class="seasons"></div>
+
+  <div class="footer small">
+    Quelle: deine Playlist (wird genutzt, URLs sind verborgen). Fortschritt wird in Firebase gespeichert.
+  </div>
+</div>
+
+<!-- Player Modal -->
+<div id="playerModal" class="modal" aria-hidden="true">
+  <div class="modal-content">
+    <div class="modal-top">
+      <div id="playerTitle" style="font-weight:700"></div>
+      <div>
+        <button id="closeModal" class="modal-close">Schließen</button>
+      </div>
+    </div>
+    <video id="playerVideo" controls playsinline></video>
+  </div>
+</div>
+
+<script>
+// ---------- CONFIG ----------
+const PLAYLIST_URL = "https://raw.githubusercontent.com/Elias3422/Hhh/main/simi_simpsons_only.m3u8";
+const PROXY_BASE = "https://simpsons-proxy.onrender.com";
+// Firebase config (user-provided)
+const firebaseConfig = {
+  apiKey: "AIzaSyBVgv79F5x0UWjgwX8tLKW9RYwWJSRfaeA",
+  authDomain: "simpsons-checkliste.firebaseapp.com",
+  databaseURL: "https://simpsons-checkliste-default-rtdb.firebaseio.com",
+  projectId: "simpsons-checkliste",
+  storageBucket: "simpsons-checkliste.firebasestorage.app",
+  messagingSenderId: "579555190501",
+  appId: "1:579555190501:web:24687ab2c8e28520f3960c"
+};
+
+// Initialize Firebase (compat libs were loaded)
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// UI refs
+const seasonsContainer = document.getElementById('seasonsContainer');
+const statusBadge = document.getElementById('statusBadge');
+const searchInput = document.getElementById('search');
+const progressFill = document.getElementById('progressFill');
+const progressPct = document.getElementById('progressPct');
+const seenCountEl = document.getElementById('seenCount');
+const allCountEl = document.getElementById('allCount');
+const playerModal = document.getElementById('playerModal');
+const playerVideo = document.getElementById('playerVideo');
+const playerTitle = document.getElementById('playerTitle');
+const closeModal = document.getElementById('closeModal');
+
+let entries = []; // {title,url,raw}
+let episodeIndex = []; // {key,title,node,url}
+let seasonNodes = [];
+let seenMap = {}; // mirror of firebase 'seen' path
+
+function setStatus(t){ statusBadge.textContent = t; }
+function escapeHtml(s){ return s.replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]); }
+
+// parse m3u playlist
+function parseM3U(text){
+  const lines = text.split(/\\r?\\n/);
+  const out = [];
+  for(let i=0;i<lines.length;i++){
+    const line = lines[i].trim();
+    if(!line) continue;
+    if(line.startsWith('#EXTINF')){
+      const comma = line.indexOf(',');
+      const title = comma>=0 ? line.slice(comma+1).trim() : line;
+      let url = '';
+      for(let j=i+1;j<lines.length;j++){
+        if(lines[j].trim() && !lines[j].trim().startsWith('#')){ url = lines[j].trim(); break; }
+      }
+      out.push({title,url,raw:line});
+    }
+  }
+  return out;
+}
+
+function makeEpisodeKeyFromTitle(title, idx){
+  const m = title.match(/S(\\d{2})E(\\d{2})/i);
+  if(m) return `S${m[1].padStart(2,'0')}E${m[2].padStart(2,'0')}`;
+  return 'EP' + String(idx+1).padStart(4,'0');
+}
+
+function renderSeasonBlock(groupName, eps){
+  const sdiv = document.createElement('div'); sdiv.className='season';
+  const head = document.createElement('div'); head.className='season-head';
+  const title = document.createElement('div'); title.innerHTML = `<div style="font-weight:700">${escapeHtml(groupName)}</div><div class="small">${eps.length} Folgen</div>`;
+  const btns = document.createElement('div'); btns.innerHTML = `<button class="btn ghost">Auf/Zu</button>`;
+  head.appendChild(title); head.appendChild(btns); sdiv.appendChild(head);
+
+  const listEl = document.createElement('div'); listEl.className='episode-list';
+  eps.forEach((ep, idx) => {
+    const key = makeEpisodeKeyFromTitle(ep.title, idx);
+    const row = document.createElement('div'); row.className='episode';
+    const left = document.createElement('div'); left.className='ep-left'; left.textContent = idx+1;
+    const t = document.createElement('div'); t.className='ep-title'; t.innerHTML = `<strong>${escapeHtml(ep.title)}</strong><div class="small">Hidden stream</div>`;
+    const actions = document.createElement('div'); actions.style.minWidth='150px';
+    const cb = document.createElement('input'); cb.type='checkbox'; cb.id = 'cb-' + key; cb.checked = !!seenMap[key];
+    cb.addEventListener('change', e=>{
+      if(db){
+        if(e.target.checked) db.ref('seen/' + key).set(true); else db.ref('seen/' + key).remove();
+      } else {
+        if(e.target.checked) seenMap[key]=true; else delete seenMap[key];
+        updateStats();
+      }
+    });
+    const playBtn = document.createElement('button'); playBtn.className='btn'; playBtn.textContent='Abspielen';
+    playBtn.addEventListener('click', ev=>{ ev.stopPropagation(); openPlayer(ep, key); });
+    actions.appendChild(cb); actions.appendChild(playBtn);
+    row.appendChild(left); row.appendChild(t); row.appendChild(actions);
+
+    row.addEventListener('click', ev=>{ if(ev.target.tagName.toLowerCase()!=='input' && ev.target.tagName.toLowerCase()!=='button') openPlayer(ep, key); });
+
+    listEl.appendChild(row);
+    episodeIndex.push({key,title:ep.title,node:row,url:ep.url});
+  });
+  btns.querySelector('button').addEventListener('click', ()=>{ listEl.style.display = listEl.style.display === 'none' ? '' : 'none'; });
+  sdiv.appendChild(listEl);
+  seasonsContainer.appendChild(sdiv);
+  seasonNodes.push({root:sdiv,list:listEl});
+}
+
+function groupAndRender(entries){
+  const groups = {};
+  entries.forEach((ep)=>{
+    const m = ep.title.match(/S(\\d{2})E(\\d{2})/i);
+    const season = m ? ('Staffel ' + parseInt(m[1],10)) : 'Sonstige';
+    if(!groups[season]) groups[season]=[];
+    groups[season].push(ep);
+  });
+  seasonsContainer.innerHTML='';
+  Object.keys(groups).sort().forEach(g=> renderSeasonBlock(g, groups[g]));
+  updateStats();
+}
+
+function openPlayer(ep, key){
+  playerTitle.textContent = ep.title;
+  // use proxy to stream mkv as mp4
+  const proxied = PROXY_BASE + '/stream?url=' + encodeURIComponent(ep.url);
+  // attach
+  if(window._hlsInstance){ window._hlsInstance.destroy(); window._hlsInstance = null; }
+  // If it's m3u8, use Hls.js, else set src directly (proxy returns mp4)
+  if(ep.url.endsWith('.m3u8')){
+    if(Hls.isSupported()){ const hls = new Hls(); window._hlsInstance = hls; hls.loadSource(proxied); hls.attachMedia(playerVideo); hls.on(Hls.Events.MANIFEST_PARSED, ()=> playerVideo.play().catch(()=>{})); }
+    else { playerVideo.src = proxied; playerVideo.play().catch(()=>{}); }
+  } else {
+    playerVideo.src = proxied;
+    playerVideo.play().catch(()=>{});
+  }
+  playerModal.classList.add('open'); playerModal.setAttribute('aria-hidden','false');
+}
+
+closeModal.addEventListener('click', ()=>{ playerModal.classList.remove('open'); playerModal.setAttribute('aria-hidden','true'); if(window._hlsInstance){ window._hlsInstance.destroy(); window._hlsInstance = null; } playerVideo.pause(); try{ playerVideo.removeAttribute('src'); }catch(e){} });
+
+playerModal.addEventListener('click', (e)=>{ if(e.target === playerModal) closeModal.click(); });
+
+function updateStats(){
+  const total = episodeIndex.length;
+  const seen = Object.keys(seenMap).length;
+  seenCountEl.textContent = seen;
+  allCountEl.textContent = total;
+  const pct = total ? Math.round(seen/total*100) : 0;
+  progressFill.style.width = pct + '%';
+  progressPct.textContent = pct + '%';
+  setStatus(`${seen} / ${total}`);
+}
+
+// Search
+searchInput.addEventListener('input', ()=>{
+  const q = searchInput.value.trim().toLowerCase();
+  episodeIndex.forEach(item=>{
+    const txt = (item.key + ' ' + item.title).toLowerCase();
+    item.node.style.display = q==='' || txt.includes(q) ? '' : 'none';
+  });
+  seasonNodes.forEach(s=>{ const any = Array.from(s.list.children).some(ch=> ch.style.display !== 'none'); s.root.style.display = any? '' : 'none'; });
+});
+
+// Export/Import
+document.getElementById('exportBtn').addEventListener('click', ()=>{
+  const data = JSON.stringify(seenMap, null, 2);
+  const blob = new Blob([data], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = 'simpsons_seen_export.json'; a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById('importBtn').addEventListener('click', ()=>{
+  const txt = prompt('Füge hier JSON ein ({"S01E01":true})');
+  try{ const obj = JSON.parse(txt||'{}'); if(db){ db.ref('seen').set(obj).then(()=> alert('Import erfolgreich')); } else { seenMap = obj; updateStats(); alert('Import lokal übernommen'); } }catch(e){ alert('Ungültiges JSON'); }
+});
+
+// Firebase realtime mirror
+if(db){
+  db.ref('seen').on('value', snap=>{
+    const data = snap.val() || {}; seenMap = {}; Object.keys(data).forEach(k=> seenMap[k]=true);
+    episodeIndex.forEach(item=>{ const cb = document.getElementById('cb-' + item.key); if(cb) cb.checked = !!seenMap[item.key]; });
+    updateStats();
+  });
+  db.ref('seen').on('child_added', snap=>{ seenMap[snap.key] = true; const cb = document.getElementById('cb-' + snap.key); if(cb) cb.checked = true; updateStats(); });
+  db.ref('seen').on('child_removed', snap=>{ delete seenMap[snap.key]; const cb = document.getElementById('cb-' + snap.key); if(cb) cb.checked = false; updateStats(); });
+} else { setStatus('Kein Firebase: läuft nur lokal'); }
+
+// Load playlist
+async function loadPlaylistAndRender(){
+  setStatus('Lade Playlist...');
+  try{
+    const res = await fetch(PLAYLIST_URL);
+    if(!res.ok) throw new Error('Fehler beim Laden: ' + res.status);
+    const txt = await res.text();
+    entries = parseM3U(txt);
+    if(entries.length === 0) setStatus('Keine Einträge in Playlist gefunden.');
+    groupAndRender(entries);
+    // initial seen snapshot
+    if(db){ db.ref('seen').once('value').then(snap=>{ const data = snap.val() || {}; seenMap = {}; Object.keys(data).forEach(k=> seenMap[k]=true); episodeIndex.forEach(item=>{ const cb = document.getElementById('cb-' + item.key); if(cb) cb.checked = !!seenMap[item.key]; }); updateStats(); }); }
+    setStatus('Bereit — Playlist geladen.');
+  }catch(e){ console.error(e); setStatus('Fehler: ' + e.message); }
+}
+
+loadPlaylistAndRender();
+
+</script>
+</body>
+</html>

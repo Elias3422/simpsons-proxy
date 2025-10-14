@@ -1,35 +1,16 @@
 import express from "express";
 import { spawn } from "child_process";
-import fetch from "node-fetch";
-import { chmodSync, existsSync } from "fs";
-import { execSync } from "child_process";
-import path from "path";
 
 const app = express();
-
-// 🧰 Stelle sicher, dass FFmpeg existiert
 const ffmpegPath = "/usr/bin/ffmpeg";
 
-async function ensureFfmpeg() {
-  try {
-    execSync(`${ffmpegPath} -version`, { stdio: "ignore" });
-    console.log("✅ FFmpeg gefunden");
-  } catch {
-    console.error("⚠️ FFmpeg fehlt! Bitte Render-Container mit FFmpeg-Image starten.");
-  }
-}
-
-ensureFfmpeg();
-
-// 🔁 Proxy-Endpunkt
-app.get("/stream", async (req, res) => {
+app.get("/stream", (req, res) => {
   const sourceUrl = req.query.url;
-  if (!sourceUrl) return res.status(400).send("Fehlender ?url Parameter");
+  if (!sourceUrl) return res.status(400).send("Missing ?url parameter");
 
-  console.log("▶️ Streaming:", sourceUrl);
-
+  console.log("Proxy streaming:", sourceUrl);
   res.setHeader("Content-Type", "video/mp4");
-
+  // spawn ffmpeg to transcode MKV->MP4 on the fly
   const ffmpeg = spawn(ffmpegPath, [
     "-i", sourceUrl,
     "-c:v", "libx264",
@@ -40,9 +21,9 @@ app.get("/stream", async (req, res) => {
   ]);
 
   ffmpeg.stdout.pipe(res);
-  ffmpeg.stderr.on("data", d => console.log(d.toString()));
-  ffmpeg.on("close", code => console.log("FFmpeg beendet mit Code:", code));
+  ffmpeg.stderr.on("data", (d) => console.error("ffmpeg:", d.toString()));
+  ffmpeg.on("close", (code) => console.log("ffmpeg exited with code", code));
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Proxy läuft auf Port ${PORT}`));
+app.listen(PORT, () => console.log(`Server listening on ${PORT}`));
